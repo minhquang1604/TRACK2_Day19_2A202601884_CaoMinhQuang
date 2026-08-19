@@ -183,9 +183,16 @@ else:
 
 # %%
 import pandas as pd
+# Query timestamps must each be >= that user's actual feature snapshot time
+# (make_user_profile sets event_timestamp = NOW - (i % 48)h, so u_001 -> -1h,
+# u_002 -> -2h, u_003 -> -3h). Querying "as of" a time *before* a user's only
+# snapshot has nothing to join to and Feast correctly drops that row (no
+# leakage) -- which silently shrank this demo to 2 rows. Ordering the query
+# times to be >= each user's snapshot keeps all 3 rows while still exercising
+# real point-in-time semantics (each row asks for a different "as of" time).
 entity_df = pd.DataFrame({
     "user_id": ["u_001", "u_002", "u_003"],
-    "event_timestamp": [NOW - timedelta(hours=2), NOW - timedelta(hours=1), NOW],
+    "event_timestamp": [NOW, NOW - timedelta(hours=1), NOW - timedelta(hours=2)],
 })
 
 historical = fs.get_historical_features(

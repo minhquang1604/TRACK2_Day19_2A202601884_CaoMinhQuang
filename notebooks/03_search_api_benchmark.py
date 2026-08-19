@@ -35,9 +35,13 @@ proc = subprocess.Popen(
     cwd=str(ROOT),
 )
 
-# Đợi server up + warm (Searcher.from_corpus loads embeddings + indexes 1000 docs)
+# Đợi server up + warm (Searcher.from_corpus loads embeddings + indexes 1000 docs).
+# Budget generous (5 min): CPU-bound ONNX embedding of 1000 docs can take well
+# over 60s on a slower machine / WSL2 / CI runner, not just the ~15-30s seen
+# on a fast laptop -- 60s was too tight and caused spurious failures.
+READY_TIMEOUT_S = 300
 URL = "http://localhost:8000"
-for _ in range(60):
+for _ in range(READY_TIMEOUT_S):
     try:
         r = httpx.get(f"{URL}/healthz", timeout=2.0)
         if r.status_code == 200 and r.json().get("ready"):
@@ -46,7 +50,7 @@ for _ in range(60):
         pass
     time.sleep(1)
 else:
-    raise RuntimeError("API didn't become ready within 60s")
+    raise RuntimeError(f"API didn't become ready within {READY_TIMEOUT_S}s")
 
 print(httpx.get(f"{URL}/healthz").json())
 
@@ -101,6 +105,15 @@ def benchmark_mode(mode: str, reps: int = 2) -> dict[str, float]:
         "p99_wall":   percentile(wall_latencies, 0.99),
     }
 
+
+# Warm-up: first requests after server startup pay a one-off cost (ONNX
+# session lazily touching pages, connection pool setup, etc.) that would
+# otherwise leak into the P99 tail below. 10 queries/mode, results discarded
+# — see README troubleshooting: "NB3 P99 > 50ms -> chạy 10 query warmup trước".
+for mode in ("keyword", "semantic", "hybrid"):
+    for q in golden[:10]:
+        httpx.get(f"{URL}/search", params={"q": q["query"], "mode": mode})
+print(f"Warm-up done (10 queries x 3 modes, results discarded)")
 
 print(f"  {'mode':10}  {'P50':>7}  {'P95':>7}  {'P99':>7}  {'P99(wall)':>9}")
 results = {}
